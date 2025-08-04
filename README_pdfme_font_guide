@@ -1,0 +1,255 @@
+# 📄 Hướng dẫn sử dụng pdfme với Font tiếng Nhật
+
+## 🎯 Mục đích
+Tài liệu này hướng dẫn cách sử dụng library `@pdfme/generator` để tạo PDF hỗ trợ tiếng Nhật mà không gặp lỗi encoding như "WinAnsi cannot encode".
+
+## ❌ Vấn đề thường gặp
+
+### Lỗi WinAnsi Encoding:
+```
+PDF generation failed: Error: WinAnsi cannot encode "こ" (0x3053)
+    at Encoding2.encodeUnicodeCodePoint
+    at StandardFontEmbedder.encodeTextAsGlyphs
+```
+
+### Nguyên nhân:
+- Font không được load đúng cách
+- pdfme fallback về font mặc định với encoding WinAnsi
+- WinAnsi không hỗ trợ ký tự Unicode như tiếng Nhật
+
+## ✅ Giải pháp đúng
+
+### 1. Cấu trúc thư mục
+```
+public/
+├── fonts/
+│   └── NotoSansJP-Regular.ttf  (9.1MB)
+└── ...
+```
+
+### 2. Code implementation đúng
+
+```typescript
+import type { Template } from '@pdfme/common';
+import { generate } from '@pdfme/generator';
+
+// ✅ ĐÚNG: Load font và return Uint8Array
+async function loadFont() {
+  const res = await fetch('/fonts/NotoSansJP-Regular.ttf');
+  const buffer = await res.arrayBuffer();
+  return new Uint8Array(buffer);  // Chỉ return data thôi
+}
+
+export function useFileDownloader() {
+  async function generateSimplePdf() {
+    // Load font data
+    const fontData = await loadFont();
+
+    // Template configuration
+    const template: Template = {
+      basePdf: {
+        width: 210,
+        height: 297,
+        padding: [10, 10, 10, 10] as [number, number, number, number],
+      },
+      schemas: [
+        [{
+          name: 'title',
+          type: 'text',
+          position: { x: 10, y: 15 },
+          width: 190,
+          height: 12,
+          fontSize: 18,
+          fontName: 'NotoSansJP',  // Tên font
+          alignment: 'center',
+        }],
+      ],
+      // ⚠️ KHÔNG đưa fonts vào đây
+    };
+
+    try {
+      // ✅ QUAN TRỌNG: Font phải ở trong options.font
+      const pdf = await generate({
+        template,
+        inputs: [{
+          title: 'Japanese: こんにちは 🎌',
+        }],
+        options: {
+          font: {
+            NotoSansJP: {
+              data: fontData,    // Font data từ local
+              fallback: true,    // Fallback nếu cần
+            },
+          },
+        },
+      });
+
+      // Download PDF
+      const blob = new Blob([pdf.buffer], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `document-${Date.now()}.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+
+      console.log('✅ PDF generated successfully!');
+    } catch (error) {
+      console.error('❌ PDF generation failed:', error);
+      console.error('Lỗi tạo PDF. Kiểm tra console để biết chi tiết.');
+    }
+  }
+
+  return { generateSimplePdf };
+}
+```
+
+## 🔄 So sánh cách làm SAI vs ĐÚNG
+
+### ❌ SAI (gây lỗi WinAnsi):
+
+```typescript
+// SAI: Return object phức tạp
+async function loadFont() {
+  return {
+    name: 'NotoSansJP',
+    data: new Uint8Array(buffer),
+    fallback: true,
+    subset: false,  // Metadata không cần thiết
+  };
+}
+
+// SAI: Đưa font vào template.fonts
+const template = {
+  // ...
+  fonts: {
+    NotoSansJP: font,  // ❌ Sai chỗ này
+  },
+};
+
+// SAI: Không có options.font
+const pdf = await generate({
+  template,
+  inputs,
+  // Thiếu options.font
+});
+```
+
+### ✅ ĐÚNG (hoạt động tốt):
+
+```typescript
+// ĐÚNG: Chỉ return Uint8Array
+async function loadFont() {
+  const res = await fetch('/fonts/NotoSansJP-Regular.ttf');
+  const buffer = await res.arrayBuffer();
+  return new Uint8Array(buffer);  // Đơn giản
+}
+
+// ĐÚNG: Template không có fonts
+const template = {
+  basePdf: { ... },
+  schemas: [ ... ],
+  // Không có fonts ở đây
+};
+
+// ĐÚNG: Font ở trong options
+const pdf = await generate({
+  template,
+  inputs,
+  options: {
+    font: {
+      NotoSansJP: {
+        data: fontData,    // ✅ Đúng chỗ này
+        fallback: true,
+      },
+    },
+  },
+});
+```
+
+## 🎌 Ví dụ với nội dung tiếng Nhật
+
+```typescript
+const inputs = [
+  {
+    title: 'プロジェクトスケジュール',
+    content: `
+      プロジェクト名: Webアプリケーション開発
+      担当者: 田中太郎
+      期間: 2024年1月〜3月
+      
+      作業内容:
+      • フロントエンド開発
+      • バックエンド開発  
+      • テスト実行
+      
+      備考: 日本語フォント対応PDF生成
+    `,
+    footer: '注記: pdfme による日本語フォント対応',
+  },
+];
+```
+
+## 🛠️ Troubleshooting
+
+### Lỗi 404 khi load font:
+```
+Failed to fetch font: 404 Not Found
+```
+**Giải pháp:** Kiểm tra file `NotoSansJP-Regular.ttf` có tồn tại trong `public/fonts/`
+
+### Lỗi CORS:
+```
+Access to fetch blocked by CORS policy
+```
+**Giải pháp:** Đảm bảo font file được serve từ cùng domain
+
+### Font không hiển thị:
+- Kiểm tra `fontName: 'NotoSansJP'` trong schema
+- Đảm bảo tên font match với key trong `options.font`
+
+## 📊 Performance Notes
+
+- **Font size**: NotoSansJP-Regular.ttf ~ 9.1MB
+- **Load time**: ~1-2s tùy connection
+- **Recommendation**: Cache font data nếu tạo nhiều PDF
+
+## 🔄 Migration từ CDN sang Local
+
+Nếu đang dùng CDN font:
+
+```typescript
+// CDN (cũ)
+options: {
+  font: {
+    NotoSansJP: {
+      data: 'https://fonts.gstatic.com/s/notosansjp/...',
+      fallback: true,
+    },
+  },
+}
+
+// Local (mới)
+const fontData = await loadFont();
+options: {
+  font: {
+    NotoSansJP: {
+      data: fontData,  // Uint8Array từ local file
+      fallback: true,
+    },
+  },
+}
+```
+
+## 📝 Checklist
+
+- [ ] Font file `NotoSansJP-Regular.ttf` trong `public/fonts/`
+- [ ] `loadFont()` return `Uint8Array`
+- [ ] Font config trong `options.font`, KHÔNG trong `template.fonts`
+- [ ] `fontName: 'NotoSansJP'` trong schema elements
+- [ ] Test với ký tự tiếng Nhật: ひらがな, カタカナ, 漢字
+- [ ] Error handling với `console.error()` thay vì `alert()`
+
+---
+
+🎯 **Kết quả**: PDF hỗ trợ hoàn toàn tiếng Nhật mà không gặp lỗi WinAnsi encoding! 
